@@ -5,9 +5,10 @@ interface TopBarProps {
   onSearch: (query: string) => void;
   onManagePlaylists: () => void;
   onWatchParty: () => void;
+  onRefresh?: () => void;
 }
 
-export const TopBar: React.FC<TopBarProps> = ({ onSearch, onManagePlaylists, onWatchParty }) => {
+export const TopBar: React.FC<TopBarProps> = ({ onSearch, onManagePlaylists, onWatchParty, onRefresh }) => {
   const [isSearching, setIsSearching] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -61,7 +62,11 @@ export const TopBar: React.FC<TopBarProps> = ({ onSearch, onManagePlaylists, onW
             <button className="p-1.5 hover:bg-white/10 rounded-full transition-colors">
               <Star className="w-5 h-5" />
             </button>
-            <button className="p-1.5 hover:bg-white/10 rounded-full transition-colors">
+            <button 
+              onClick={onRefresh}
+              className="p-1.5 hover:bg-white/10 rounded-full transition-colors"
+              title="Refresh Playlist"
+            >
               <RefreshCw className="w-5 h-5" />
             </button>
             <button 

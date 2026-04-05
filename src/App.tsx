@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { TopBar } from './components/TopBar';
 import { BottomNav } from './components/BottomNav';
 import { ChannelCard } from './components/ChannelCard';
@@ -6,17 +7,34 @@ import { VideoPlayer } from './components/VideoPlayer';
 import { WatchPartyPanel } from './components/WatchPartyPanel';
 import { defaultPlaylists, PlaylistDef } from './data/playlists';
 import { parseM3U, Channel } from './utils/m3uParser';
-import { Play, Tv, X, AlertCircle, Loader2, Check, Plus, Trash2, Edit2, Radio, Info, Users, ExternalLink, Smartphone } from 'lucide-react';
+import { Play, Tv, X, AlertCircle, Loader2, Check, Plus, Trash2, Edit2, Radio, Info, Users, ExternalLink, Smartphone, RotateCw } from 'lucide-react';
+
+const getProxiedUrl = (url: string) => {
+  if (!url || url.startsWith('http://localhost') || url.startsWith('blob:') || url.startsWith('https://api.github.com')) {
+    return url;
+  }
+  return `https://sports-proxy.darajazb.workers.dev/?${encodeURIComponent(url)}`;
+};
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('live');
   const [customPlaylists, setCustomPlaylists] = useState<PlaylistDef[]>(() => {
-    const saved = localStorage.getItem('customPlaylists');
-    return saved ? JSON.parse(saved) : [];
+    try {
+      const saved = localStorage.getItem('customPlaylists');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      console.error('Failed to parse customPlaylists from localStorage', e);
+      return [];
+    }
   });
   const [favorites, setFavorites] = useState<string[]>(() => {
-    const saved = localStorage.getItem('favoriteChannels');
-    return saved ? JSON.parse(saved) : [];
+    try {
+      const saved = localStorage.getItem('favoriteChannels');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      console.error('Failed to parse favoriteChannels from localStorage', e);
+      return [];
+    }
   });
   
   const allPlaylists = useMemo(() => [...defaultPlaylists, ...customPlaylists], [customPlaylists]);
@@ -26,6 +44,9 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [playingChannel, setPlayingChannel] = useState<Channel | null>(null);
+  const [showPlayerOverlay, setShowPlayerOverlay] = useState(true);
+  const [playerOverlayTab, setPlayerOverlayTab] = useState<'suggested' | 'playlist'>('suggested');
+  const [isLandscapeForced, setIsLandscapeForced] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeGroup, setActiveGroup] = useState('All');
 
@@ -83,7 +104,11 @@ export default function App() {
 
     // Continuous debugger loop to deter inspection
     const debuggerInterval = setInterval(() => {
-      Function('debugger')();
+      try {
+        Function('debugger')();
+      } catch (e) {
+        // Ignore EvalError if CSP blocks it
+      }
     }, 100);
 
     return () => {
@@ -109,41 +134,51 @@ export default function App() {
     );
   };
 
-  useEffect(() => {
-    const fetchPlaylist = async () => {
-      setLoading(true);
-      setError(null);
-      
-      if (selectedPlaylist.type === 'web') {
-        setChannels([{
-          name: selectedPlaylist.name,
-          url: selectedPlaylist.url,
-          group: selectedPlaylist.group,
-          logo: '',
-          type: 'web'
-        }]);
-        setLoading(false);
-        return;
-      }
+  const fetchPlaylist = async () => {
+    setLoading(true);
+    setError(null);
+    
+    if (selectedPlaylist.type === 'web') {
+      setChannels([{
+        name: selectedPlaylist.name,
+        url: selectedPlaylist.url,
+        group: selectedPlaylist.group,
+        logo: '',
+        type: 'web'
+      }]);
+      setLoading(false);
+      return;
+    }
 
+    try {
+      let response;
       try {
-        const response = await fetch(selectedPlaylist.url);
+        response = await fetch(selectedPlaylist.url);
+        if (!response.ok) throw new Error('Not ok');
+      } catch (e) {
+        response = await fetch(getProxiedUrl(selectedPlaylist.url));
         if (!response.ok) {
           throw new Error('Failed to fetch playlist');
         }
-        const text = await response.text();
-        const parsedChannels = parseM3U(text, selectedPlaylist.name);
-        setChannels(parsedChannels);
-      } catch (err: any) {
-        setError(err.message || 'An error occurred while loading the playlist.');
-        setChannels([]);
-      } finally {
-        setLoading(false);
       }
-    };
+      const text = await response.text();
+      const parsedChannels = parseM3U(text, selectedPlaylist.name);
+      setChannels(parsedChannels);
+    } catch (err: any) {
+      setError(err.message || 'An error occurred while loading the playlist.');
+      setChannels([]);
+    } finally {
+      setLoading(false);
+    }
+  };
 
+  useEffect(() => {
     fetchPlaylist();
   }, [selectedPlaylist]);
+
+  const handleRefreshPlaylist = () => {
+    fetchPlaylist();
+  };
 
   const channelCategories = useMemo(() => {
     return Array.from(new Set(channels.map(c => c.group || 'Uncategorized')));
@@ -180,9 +215,15 @@ export default function App() {
 
     try {
       // Validate the playlist URL
-      const response = await fetch(newPlaylistUrl);
-      if (!response.ok) {
-        throw new Error('Failed to fetch playlist');
+      let response;
+      try {
+        response = await fetch(newPlaylistUrl);
+        if (!response.ok) throw new Error('Not ok');
+      } catch (e) {
+        response = await fetch(getProxiedUrl(newPlaylistUrl));
+        if (!response.ok) {
+          throw new Error('Failed to fetch playlist');
+        }
       }
       const text = await response.text();
       const parsedChannels = parseM3U(text, 'My Playlists');
@@ -223,12 +264,77 @@ export default function App() {
     setNewPlaylistUrl(playlist.url);
   };
 
+  const fetchChaupalPlaylists = async () => {
+    setIsSavingPlaylist(true);
+    setPlaylistError(null);
+    try {
+      const response = await fetch('https://api.github.com/repos/dartv-ajaz/chaupal/contents/');
+      if (!response.ok) throw new Error('Failed to fetch from GitHub');
+      const data = await response.json();
+      
+      if (!Array.isArray(data)) {
+        throw new Error(data.message || 'Invalid response from GitHub');
+      }
+      
+      const newPlaylists: PlaylistDef[] = [];
+      for (const file of data) {
+        if (file.name.endsWith('.json') || file.name.endsWith('.m3u') || file.name.endsWith('.m3u8')) {
+          const formattedName = file.name
+            .replace(/\.(json|m3u8?)$/, '')
+            .split('_')
+            .map((word: string) => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(' ');
+            
+          newPlaylists.push({
+            name: formattedName,
+            url: file.download_url,
+            group: 'Chaupal',
+            type: file.name.endsWith('.m3u') || file.name.endsWith('.m3u8') ? 'm3u' : undefined
+          });
+        }
+      }
+      
+      if (newPlaylists.length > 0) {
+        setCustomPlaylists(prev => {
+          const existingUrls = new Set(prev.map(p => p.url));
+          const uniqueNew = newPlaylists.filter(p => !existingUrls.has(p.url));
+          return [...prev, ...uniqueNew];
+        });
+        setNewPlaylistName('');
+        setNewPlaylistUrl('');
+        setShowPlaylistManager(false);
+      } else {
+        setPlaylistError('No playlists found in the repository.');
+      }
+    } catch (err: any) {
+      console.error(err);
+      setPlaylistError('Failed to fetch Chaupal playlists.');
+    } finally {
+      setIsSavingPlaylist(false);
+    }
+  };
+
+  useEffect(() => {
+    let timeout: NodeJS.Timeout;
+    if (playingChannel && showPlayerOverlay) {
+      timeout = setTimeout(() => {
+        setShowPlayerOverlay(false);
+      }, 5000);
+    }
+    return () => clearTimeout(timeout);
+  }, [playingChannel, showPlayerOverlay]);
+
+  const togglePlayerOverlay = () => {
+    setShowPlayerOverlay(!showPlayerOverlay);
+  };
+
   return (
     <div className="min-h-screen bg-[#121212] text-white font-sans pb-20">
       <TopBar 
         onSearch={setSearchQuery} 
         onManagePlaylists={() => setShowPlaylistManager(true)} 
         onWatchParty={() => setShowWatchPartyModal(true)}
+        onRefresh={handleRefreshPlaylist}
       />
 
       {/* Ticker / Banner */}
@@ -238,89 +344,82 @@ export default function App() {
         </p>
       </div>
 
-      <main className="p-4 max-w-7xl mx-auto">
-        {/* Video Player Modal/Section */}
+      {/* Sticky Top Player */}
+      <AnimatePresence>
         {playingChannel && (
-          <div className="fixed inset-0 z-[100] bg-[#0f0f0f] flex flex-col">
-            {/* Close Button */}
-            <button
-              onClick={() => setPlayingChannel(null)}
-              className="absolute top-4 right-4 z-[110] p-2 bg-black/50 hover:bg-white/20 rounded-full transition-colors backdrop-blur-md border border-white/10"
-            >
-              <X className="w-6 h-6" />
-            </button>
+          <motion.div 
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="sticky top-0 z-40 w-full bg-black border-b border-[#00ff88]/20 shadow-2xl overflow-hidden"
+          >
+            <div className="max-w-7xl mx-auto relative group">
+              <div className="aspect-video md:aspect-[21/9] max-h-[70vh] w-full">
+                {playingChannel.type === 'web' ? (
+                  <iframe
+                    src={playingChannel.url}
+                    className="w-full h-full border-0 bg-black"
+                    allowFullScreen
+                    allow="autoplay; encrypted-media"
+                  />
+                ) : (
+                  <VideoPlayer 
+                    url={playingChannel.url} 
+                    drm={playingChannel.drm} 
+                    headers={playingChannel.headers}
+                    className="w-full h-full" 
+                    onToggleOverlay={togglePlayerOverlay}
+                  />
+                )}
+              </div>
 
-            {/* Top: Video Player (Static) */}
-            <div className="w-full bg-black flex-shrink-0 flex items-center justify-center relative shadow-2xl shadow-black/50 z-50" style={{ height: '40vh', minHeight: '250px', maxHeight: '500px' }}>
-              {playingChannel.type === 'web' ? (
-                <iframe
-                  src={playingChannel.url}
-                  className="w-full h-full border-0 bg-black"
-                  allowFullScreen
-                  allow="autoplay; encrypted-media"
-                />
-              ) : (
-                <VideoPlayer url={playingChannel.url} drm={playingChannel.drm} className="w-full h-full" />
-              )}
-            </div>
-
-            {/* Bottom: Info and Suggested Channels (Scrollable) */}
-            <div className="flex-1 overflow-y-auto w-full">
-              <div className="max-w-7xl mx-auto p-4 lg:p-8 flex flex-col gap-8">
-                {/* Info */}
-                <div className="flex flex-col gap-6">
-                  <div className="flex items-start gap-4">
-                    <div className="w-16 h-16 lg:w-20 lg:h-20 bg-white rounded-xl p-2 flex items-center justify-center shadow-lg shadow-[#00ff88]/5 border border-white/5 flex-shrink-0">
-                      {playingChannel.logo ? (
-                        <img src={playingChannel.logo} alt={playingChannel.name} className="max-w-full max-h-full object-contain" />
-                      ) : (
-                        <Tv className="w-8 h-8 lg:w-10 lg:h-10 text-gray-300" />
-                      )}
-                    </div>
-                    <div className="flex flex-col pt-1">
-                      <h2 className="text-2xl lg:text-3xl font-bold text-white mb-2 leading-tight">{playingChannel.name}</h2>
+              {/* Overlay UI (Simplified for sticky layout) */}
+              <AnimatePresence>
+                {showPlayerOverlay && (
+                  <motion.div 
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="absolute inset-0 z-10 bg-gradient-to-t from-black/80 via-transparent to-black/60 flex flex-col pointer-events-none"
+                  >
+                    {/* Top Bar */}
+                    <div className="p-4 flex items-center justify-between pointer-events-auto">
                       <div className="flex items-center gap-3">
-                        <span className="inline-block px-3 py-1 bg-[#00ff88]/10 text-[#00ff88] rounded-full text-xs font-semibold border border-[#00ff88]/20">
-                          {playingChannel.group || 'Uncategorized'}
-                        </span>
-                        <span className="text-[#ff4444] text-xs font-medium flex items-center gap-1.5 bg-[#ff4444]/10 px-3 py-1 rounded-full border border-[#ff4444]/20">
-                          <Radio className="w-3 h-3 animate-pulse" /> Live
-                        </span>
+                        <div className="w-8 h-8 bg-white rounded-full p-1 flex items-center justify-center flex-shrink-0 border border-[#00ff88]">
+                          {playingChannel.logo ? (
+                            <img src={playingChannel.logo} alt={playingChannel.name} className="max-w-full max-h-full object-contain rounded-full" />
+                          ) : (
+                            <Tv className="w-4 h-4 text-gray-800" />
+                          )}
+                        </div>
+                        <div>
+                          <h2 className="text-sm font-bold text-white leading-tight line-clamp-1">{playingChannel.name}</h2>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[8px] font-bold text-[#00ff88] uppercase tracking-wider">{playingChannel.group || 'Live'}</span>
+                            <span className="text-[8px] font-bold text-blue-400 uppercase tracking-widest bg-blue-400/10 px-1.5 py-0.5 rounded-full border border-blue-400/20">
+                              {localStorage.getItem('player_engine') || 'JWPlayer'}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => setPlayingChannel(null)}
+                          className="p-2 bg-white/10 hover:bg-white/20 rounded-full transition-colors backdrop-blur-md border border-white/10"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
                       </div>
                     </div>
-                  </div>
-
-                  {/* Stream Details & External Players removed for security */}
-                </div>
-
-                {/* Suggested Channels */}
-                <div className="w-full flex flex-col gap-4 mt-2">
-                  <h3 className="text-white text-lg font-bold flex items-center gap-2">
-                    Suggested Channels
-                  </h3>
-                  <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8 gap-3">
-                    {filteredChannels
-                      .filter(c => c.name !== playingChannel.name)
-                      .slice(0, 24)
-                      .map((c, idx) => (
-                        <ChannelCard
-                          key={`${c.name}-${idx}`}
-                          channel={c}
-                          onClick={() => setPlayingChannel(c)}
-                          isFavorite={favorites.includes(c.url)}
-                          onToggleFavorite={(e) => {
-                            e.stopPropagation();
-                            toggleFavorite(c.url);
-                          }}
-                          searchQuery={searchQuery}
-                        />
-                      ))}
-                  </div>
-                </div>
-              </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
-          </div>
+          </motion.div>
         )}
+      </AnimatePresence>
+
+      <main className="p-4 max-w-7xl mx-auto">
 
         {/* Watch Party Modal */}
         {showWatchPartyModal && (
@@ -427,6 +526,25 @@ export default function App() {
                   ) : (
                     editingPlaylist ? 'Update Playlist' : 'Add Playlist'
                   )}
+                </button>
+
+                <div className="relative flex items-center py-2">
+                  <div className="flex-grow border-t border-gray-600"></div>
+                  <span className="flex-shrink-0 mx-4 text-gray-400 text-xs uppercase font-semibold">Or</span>
+                  <div className="flex-grow border-t border-gray-600"></div>
+                </div>
+
+                <button 
+                  onClick={fetchChaupalPlaylists}
+                  disabled={isSavingPlaylist}
+                  className="bg-[#3b82f6] text-white font-semibold py-2 rounded-lg hover:bg-[#2563eb] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  {isSavingPlaylist ? (
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                  ) : (
+                    <Plus className="w-5 h-5" />
+                  )}
+                  Fetch Chaupal Playlists
                 </button>
               </div>
 

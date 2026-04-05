@@ -1,5 +1,11 @@
 @import "tailwindcss";
 
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --animate-spin-slow: spin 3s linear infinite;
+}
+
 @layer utilities {
   .scrollbar-hide {
     /* IE and Edge */
@@ -19,4 +25,14 @@
 
 .animate-marquee {
   animation: marquee 20s linear infinite;
+}
+
+.landscape-forced {
+  width: 100vh !important;
+  height: 100vw !important;
+  position: fixed !important;
+  top: 50% !important;
+  left: 50% !important;
+  transform: translate(-50%, -50%) rotate(90deg) !important;
+  z-index: 9999 !important;
 }

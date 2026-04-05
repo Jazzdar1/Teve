@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { VideoPlayer } from './components/VideoPlayer';
 
 const App = () => {
-  const engines = ['Auto', 'HLS.js', 'Shaka Player', 'Dash.js', 'React Player', 'Native', 'DPlayer', 'JWPlayer', 'Plyr', 'Video.js'];
+  const engines = ['Auto', 'HLS.js', 'JWPlayer'];
   const [engine, setEngine] = React.useState(engines[0]);
 
   return (
